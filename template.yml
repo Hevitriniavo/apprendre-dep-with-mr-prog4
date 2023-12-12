@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: prog4Poja - Computation and API
+
+Globals:
+  Function:
+    CodeUri: .
+    Runtime: java17
+    Tracing: Active
+    Architectures:
+      - x86_64
+    Timeout: 600
+    AutoPublishAlias: live
+    SnapStart:
+      ApplyOn: PublishedVersions
+    
+    Environment:
+      Variables:
+        ENV: !Ref Env
+        AWS_SQS_QUEUE_URL: !Sub '{{resolve:ssm:/prog4Poja/${Env}/sqs/mailbox-queue-url}}'
+        AWS_EVENTBRIDGE_BUS: !Sub '{{resolve:ssm:/prog4Poja/${Env}/eventbridge/bus-name}}'
+        AWS_S3_BUCKET: !Sub '{{resolve:ssm:/prog4Poja/${Env}/s3/bucket-name}}'
+        AWS_SES_SOURCE: noreply@nowhere.com
+        DATABASE_URL: !Sub '{{resolve:ssm:/prog4Poja/${Env}/db/url}}'
+        DATABASE_USERNAME: !Sub '{{resolve:ssm:/prog4Poja/${Env}/db/username}}'
+        DATABASE_PASSWORD: !Sub '{{resolve:ssm:/prog4Poja/${Env}/db/password}}'
+        
+
+Parameters:
+  Env:
+    Type: String
+
+Resources:
+  FrontalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: com.prog4.poja.ApiEventHandler::handleRequest
+      MemorySize: 512
+      Role: !Sub '{{resolve:ssm:/prog4Poja/${Env}/execution/role-arn}}'
+      Events:
+        ApiCall:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: com.prog4.poja.MailboxEventHandler::handleRequest
+      MemorySize: 1024
+      Role: !Sub '{{resolve:ssm:/prog4Poja/${Env}/execution/role-arn}}'
+      Events:
+        AllEvents:
+          Type: SQS
+          Properties:
+            Queue: !Sub '{{resolve:ssm:/prog4Poja/${Env}/sqs/mailbox-queue-arn}}'
+            BatchSize: 5
+
+  ApplicationResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name:
+        Fn::Sub: ApplicationInsights-SAM-${AWS::StackName}
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+  ApplicationInsightsMonitoring:
+    Type: AWS::ApplicationInsights::Application
+    Properties:
+      ResourceGroupName: !Ref ApplicationResourceGroup
+      AutoConfigurationEnabled: 'true'
+
+  ApiUrlSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Join [ '', [ /prog4Poja/, !Ref Env, /api/url ] ]
+      Type: String
+      Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt ApiUrlSSM.Value
